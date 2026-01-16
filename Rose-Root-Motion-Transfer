@@ -2,29 +2,42 @@ import maya.cmds as cmds
 
 WINDOW_NAME = "ROSERootMotionUI"
 
+
+# ------------------------------------------------
+# UI
+# ------------------------------------------------
 def create_ui():
     if cmds.window(WINDOW_NAME, exists=True):
         cmds.deleteUI(WINDOW_NAME)
 
-    cmds.window(WINDOW_NAME, title="ROSE Root Motion (UE5)", widthHeight=(330, 200))
-    cmds.columnLayout(adjustableColumn=True, rowSpacing=8)
+    cmds.window(WINDOW_NAME, title="ROSE Root Motion (UE5)", widthHeight=(360, 240))
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=10)
 
-    cmds.text(label="Pelvis / Control Seç")
-    cmds.rowLayout(nc=2, cw2=(220, 80))
+    cmds.text(label="Pelvis / Master Control Seç")
+    cmds.rowLayout(nc=2, cw2=(250, 90))
     cmds.textField("controlField")
     cmds.button(label="Seç", command=select_control)
     cmds.setParent("..")
 
     cmds.text(label="Root Joint Seç")
-    cmds.rowLayout(nc=2, cw2=(220, 80))
-    cmds.textField("jointField")
-    cmds.button(label="Seç", command=select_joint)
+    cmds.rowLayout(nc=2, cw2=(250, 90))
+    cmds.textField("rootField")
+    cmds.button(label="Seç", command=select_root)
     cmds.setParent("..")
 
     cmds.separator(height=10)
+
+    cmds.checkBox(
+        "zeroRootCheck",
+        label="Root 0,0,0'dan başlasın (UE5)",
+        value=True
+    )
+
+    cmds.separator(height=10)
+
     cmds.button(
         label="START - Root Motion Transfer",
-        height=40,
+        height=45,
         bgc=(0.25, 0.65, 0.25),
         command=transfer_root_motion
     )
@@ -32,21 +45,39 @@ def create_ui():
     cmds.showWindow(WINDOW_NAME)
 
 
+# ------------------------------------------------
+# Selection Helpers
+# ------------------------------------------------
 def select_control(*args):
     sel = cmds.ls(sl=True)
     if sel:
         cmds.textField("controlField", e=True, text=sel[0])
 
 
-def select_joint(*args):
+def select_root(*args):
     sel = cmds.ls(sl=True)
     if sel:
-        cmds.textField("jointField", e=True, text=sel[0])
+        cmds.textField("rootField", e=True, text=sel[0])
 
 
+# ------------------------------------------------
+# World Space Helpers
+# ------------------------------------------------
+def get_world_pos(obj):
+    return cmds.xform(obj, q=True, ws=True, t=True)
+
+
+def get_world_rot_y(obj):
+    return cmds.xform(obj, q=True, ws=True, ro=True)[1]
+
+
+# ------------------------------------------------
+# Root Motion Transfer
+# ------------------------------------------------
 def transfer_root_motion(*args):
     control = cmds.textField("controlField", q=True, text=True)
-    root = cmds.textField("jointField", q=True, text=True)
+    root = cmds.textField("rootField", q=True, text=True)
+    zero_root = cmds.checkBox("zeroRootCheck", q=True, value=True)
 
     if not cmds.objExists(control) or not cmds.objExists(root):
         cmds.warning("Control veya Root geçerli değil!")
@@ -55,36 +86,43 @@ def transfer_root_motion(*args):
     start = int(cmds.playbackOptions(q=True, min=True))
     end = int(cmds.playbackOptions(q=True, max=True))
 
-    # --- İlk frame offset ---
-    cmds.currentTime(start)
-    base_tx = cmds.getAttr(f"{control}.translateX")
-    base_tz = cmds.getAttr(f"{control}.translateZ")
-    base_ry = cmds.getAttr(f"{control}.rotateY")
-
-    # Root temizle
     cmds.cutKey(root, t=(start, end), clear=True)
+
+    cmds.currentTime(start)
+
+    # Pelvis başlangıç WORLD değerleri
+    base_pos = get_world_pos(control)
+    base_rot_y = get_world_rot_y(control)
 
     for frame in range(start, end + 1):
         cmds.currentTime(frame)
 
-        tx = cmds.getAttr(f"{control}.translateX") - base_tx
-        tz = cmds.getAttr(f"{control}.translateZ") - base_tz
-        ry = cmds.getAttr(f"{control}.rotateY") - base_ry
+        pos = get_world_pos(control)
+        ry = get_world_rot_y(control)
+
+        if zero_root:
+            # UE5 Mode → Root 0,0,0’dan başlar
+            tx = pos[0] - base_pos[0]
+            tz = pos[2] - base_pos[2]
+            rot_y = ry - base_rot_y
+        else:
+            # Cinematic / Maya Mode → Root pelvis’i birebir takip eder
+            tx = pos[0]
+            tz = pos[2]
+            rot_y = ry
 
         cmds.setKeyframe(root, at="translateX", v=tx, t=frame)
         cmds.setKeyframe(root, at="translateZ", v=tz, t=frame)
-        cmds.setKeyframe(root, at="rotateY", v=ry, t=frame)
-
-        # Kilitlenen eksenler (Unreal safe)
-        cmds.setKeyframe(root, at="translateY", v=0, t=frame)
-        cmds.setKeyframe(root, at="rotateX", v=0, t=frame)
-        cmds.setKeyframe(root, at="rotateZ", v=0, t=frame)
+        cmds.setKeyframe(root, at="rotateY", v=rot_y, t=frame)
 
     cmds.confirmDialog(
         title="Bitti",
-        message="Root Motion başarıyla oluşturuldu!\n(UE5 uyumlu)",
+        message="Root Motion başarıyla oluşturuldu!",
         button=["OK"]
     )
 
 
+# ------------------------------------------------
+# Run
+# ------------------------------------------------
 create_ui()
