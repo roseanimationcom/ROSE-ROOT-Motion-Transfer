@@ -2,19 +2,11 @@ import maya.cmds as cmds
 
 WINDOW_NAME = "ROSERootMotionUI"
 
-TRANSFER_ATTRS = [
-    ("translateX", "translateX"),
-    ("translateZ", "translateZ"),
-    ("rotateX", "rotateX"),
-    ("rotateY", "rotateY"),
-    ("rotateZ", "rotateZ"),
-]
-
 def create_ui():
     if cmds.window(WINDOW_NAME, exists=True):
         cmds.deleteUI(WINDOW_NAME)
 
-    cmds.window(WINDOW_NAME, title="ROSE Root Motion", widthHeight=(330, 200))
+    cmds.window(WINDOW_NAME, title="ROSE Root Motion (UE5)", widthHeight=(330, 200))
     cmds.columnLayout(adjustableColumn=True, rowSpacing=8)
 
     cmds.text(label="Pelvis / Control Seç")
@@ -23,7 +15,7 @@ def create_ui():
     cmds.button(label="Seç", command=select_control)
     cmds.setParent("..")
 
-    cmds.text(label="Root Kemik Seç")
+    cmds.text(label="Root Joint Seç")
     cmds.rowLayout(nc=2, cw2=(220, 80))
     cmds.textField("jointField")
     cmds.button(label="Seç", command=select_joint)
@@ -33,8 +25,8 @@ def create_ui():
     cmds.button(
         label="START - Root Motion Transfer",
         height=40,
-        bgc=(0.2, 0.6, 0.2),
-        command=transfer_animation
+        bgc=(0.25, 0.65, 0.25),
+        command=transfer_root_motion
     )
 
     cmds.showWindow(WINDOW_NAME)
@@ -52,49 +44,45 @@ def select_joint(*args):
         cmds.textField("jointField", e=True, text=sel[0])
 
 
-def transfer_animation(*args):
+def transfer_root_motion(*args):
     control = cmds.textField("controlField", q=True, text=True)
     root = cmds.textField("jointField", q=True, text=True)
 
     if not cmds.objExists(control) or not cmds.objExists(root):
-        cmds.warning("Control ve Root kemiği geçerli değil!")
+        cmds.warning("Control veya Root geçerli değil!")
         return
 
     start = int(cmds.playbackOptions(q=True, min=True))
     end = int(cmds.playbackOptions(q=True, max=True))
 
-    for src_attr, dst_attr in TRANSFER_ATTRS:
-        src = f"{control}.{src_attr}"
-        dst = f"{root}.{dst_attr}"
+    # --- İlk frame offset ---
+    cmds.currentTime(start)
+    base_tx = cmds.getAttr(f"{control}.translateX")
+    base_tz = cmds.getAttr(f"{control}.translateZ")
+    base_ry = cmds.getAttr(f"{control}.rotateY")
 
-        if not cmds.objExists(src) or not cmds.objExists(dst):
-            continue
+    # Root temizle
+    cmds.cutKey(root, t=(start, end), clear=True)
 
-        # Var olan keyleri sil
-        cmds.cutKey(dst, t=(start, end), clear=True)
+    for frame in range(start, end + 1):
+        cmds.currentTime(frame)
 
-        # Anim curve var mı?
-        curves = cmds.listConnections(src, type="animCurve")
-        if not curves:
-            continue
+        tx = cmds.getAttr(f"{control}.translateX") - base_tx
+        tz = cmds.getAttr(f"{control}.translateZ") - base_tz
+        ry = cmds.getAttr(f"{control}.rotateY") - base_ry
 
-        # Keyleri kopyala
-        cmds.copyKey(src, t=(start, end))
+        cmds.setKeyframe(root, at="translateX", v=tx, t=frame)
+        cmds.setKeyframe(root, at="translateZ", v=tz, t=frame)
+        cmds.setKeyframe(root, at="rotateY", v=ry, t=frame)
 
-        # Root’a yapıştır
-        cmds.pasteKey(
-            dst,
-            option="replaceCompletely"
-        )
-
-    # Translate Y'yi sıfırla (güvenlik için)
-    if cmds.objExists(f"{root}.translateY"):
-        cmds.cutKey(f"{root}.translateY", t=(start, end), clear=True)
-        cmds.setAttr(f"{root}.translateY", 0)
+        # Kilitlenen eksenler (Unreal safe)
+        cmds.setKeyframe(root, at="translateY", v=0, t=frame)
+        cmds.setKeyframe(root, at="rotateX", v=0, t=frame)
+        cmds.setKeyframe(root, at="rotateZ", v=0, t=frame)
 
     cmds.confirmDialog(
-        title="Tamamlandı",
-        message="Root Motion başarıyla aktarıldı!\n(Y ekseni alınmadı)",
+        title="Bitti",
+        message="Root Motion başarıyla oluşturuldu!\n(UE5 uyumlu)",
         button=["OK"]
     )
 
