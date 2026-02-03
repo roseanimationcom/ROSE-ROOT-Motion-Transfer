@@ -2,7 +2,6 @@ import maya.cmds as cmds
 
 WINDOW_NAME = "ROSERootMotionUI"
 
-
 # ------------------------------------------------
 # UI
 # ------------------------------------------------
@@ -10,7 +9,11 @@ def create_ui():
     if cmds.window(WINDOW_NAME, exists=True):
         cmds.deleteUI(WINDOW_NAME)
 
-    cmds.window(WINDOW_NAME, title="ROSE Root Motion (UE5)", widthHeight=(360, 240))
+    cmds.window(
+        WINDOW_NAME,
+        title="ROSE Root Motion (Maya 2026)",
+        widthHeight=(360, 360)
+    )
     cmds.columnLayout(adjustableColumn=True, rowSpacing=10)
 
     cmds.text(label="Pelvis / Master Control Seç")
@@ -27,13 +30,29 @@ def create_ui():
 
     cmds.separator(height=10)
 
-    cmds.checkBox(
-        "zeroRootCheck",
-        label="Root 0,0,0'dan başlasın (UE5)",
-        value=True
+    # Axis switch (ileride kullanılabilir – şimdilik sabit mapping var)
+    cmds.text(label="Rotation Axis (UI – Sabit Y → Z Mapping)")
+    cmds.radioButtonGrp(
+        "axisSwitch",
+        numberOfRadioButtons=2,
+        labelArray2=["Y Axis", "Z Axis"],
+        select=2
     )
 
     cmds.separator(height=10)
+
+    cmds.checkBox("translateCheck", label="Translate Aktif (X / Z)", value=True)
+    cmds.checkBox("rotateCheck", label="Rotate Aktif (Y → Z)", value=True)
+
+    cmds.separator(height=10)
+
+    cmds.checkBox(
+        "zeroRootCheck",
+        label="Root 0,0,0'dan başlasın",
+        value=True
+    )
+
+    cmds.separator(height=15)
 
     cmds.button(
         label="START - Root Motion Transfer",
@@ -68,6 +87,7 @@ def get_world_pos(obj):
 
 
 def get_world_rot_y(obj):
+    """Pelvis WORLD Y rotasyonu"""
     return cmds.xform(obj, q=True, ws=True, ro=True)[1]
 
 
@@ -77,11 +97,14 @@ def get_world_rot_y(obj):
 def transfer_root_motion(*args):
     control = cmds.textField("controlField", q=True, text=True)
     root = cmds.textField("rootField", q=True, text=True)
-    zero_root = cmds.checkBox("zeroRootCheck", q=True, value=True)
 
     if not cmds.objExists(control) or not cmds.objExists(root):
         cmds.warning("Control veya Root geçerli değil!")
         return
+
+    do_translate = cmds.checkBox("translateCheck", q=True, value=True)
+    do_rotate = cmds.checkBox("rotateCheck", q=True, value=True)
+    zero_root = cmds.checkBox("zeroRootCheck", q=True, value=True)
 
     start = int(cmds.playbackOptions(q=True, min=True))
     end = int(cmds.playbackOptions(q=True, max=True))
@@ -89,7 +112,7 @@ def transfer_root_motion(*args):
     cmds.cutKey(root, t=(start, end), clear=True)
     cmds.currentTime(start)
 
-    # Pelvis başlangıç WORLD değerleri (referans)
+    # Referans değerler
     base_pos = get_world_pos(control)
     base_rot_y = get_world_rot_y(control)
 
@@ -97,26 +120,28 @@ def transfer_root_motion(*args):
         cmds.currentTime(frame)
 
         pos = get_world_pos(control)
-        ry = get_world_rot_y(control)
+        rot_y = get_world_rot_y(control)
 
         if zero_root:
-            # SADECE OFFSET ÇIKAR — temiz takip
             tx = pos[0] - base_pos[0]
             tz = pos[2] - base_pos[2]
-            rot_y = ry - base_rot_y
+            rot_z = rot_y - base_rot_y
         else:
-            # Pelvis world’u birebir kopyala
             tx = pos[0]
             tz = pos[2]
-            rot_y = ry
+            rot_z = rot_y
 
-        cmds.setKeyframe(root, at="translateX", v=tx, t=frame)
-        cmds.setKeyframe(root, at="translateZ", v=tz, t=frame)
-        cmds.setKeyframe(root, at="rotateZ", v=rot_y, t=frame)
+        if do_translate:
+            cmds.setKeyframe(root, at="translateX", v=tx, t=frame)
+            cmds.setKeyframe(root, at="translateZ", v=tz, t=frame)
+
+        if do_rotate:
+            # 🔥 CORE FIX: Pelvis Y → Root Z
+            cmds.setKeyframe(root, at="rotateZ", v=rot_z, t=frame)
 
     cmds.confirmDialog(
         title="Bitti",
-        message="Root pelvis'i temiz şekilde takip ediyor.",
+        message="Pelvis Y → Root Z rotasyonu doğru şekilde aktarıldı.",
         button=["OK"]
     )
 
