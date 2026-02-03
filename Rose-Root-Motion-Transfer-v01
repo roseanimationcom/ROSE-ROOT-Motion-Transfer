@@ -87,9 +87,10 @@ def transfer_root_motion(*args):
     end = int(cmds.playbackOptions(q=True, max=True))
 
     cmds.cutKey(root, t=(start, end), clear=True)
+
     cmds.currentTime(start)
 
-    # Pelvis başlangıç WORLD değerleri (referans)
+    # Pelvis başlangıç WORLD değerleri
     base_pos = get_world_pos(control)
     base_rot_y = get_world_rot_y(control)
 
@@ -100,12 +101,12 @@ def transfer_root_motion(*args):
         ry = get_world_rot_y(control)
 
         if zero_root:
-            # SADECE OFFSET ÇIKAR — temiz takip
+            # UE5 Mode › Root 0,0,0’dan başlar
             tx = pos[0] - base_pos[0]
             tz = pos[2] - base_pos[2]
             rot_y = ry - base_rot_y
         else:
-            # Pelvis world’u birebir kopyala
+            # Cinematic / Maya Mode › Root pelvis’i birebir takip eder
             tx = pos[0]
             tz = pos[2]
             rot_y = ry
@@ -116,7 +117,7 @@ def transfer_root_motion(*args):
 
     cmds.confirmDialog(
         title="Bitti",
-        message="Root pelvis'i temiz şekilde takip ediyor.",
+        message="Root Motion başarıyla oluşturuldu!",
         button=["OK"]
     )
 
