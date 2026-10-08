@@ -1,0 +1,299 @@
+# Shelf Sizer - Maya için UI ile shelf yüksekliği ayarlama + reset
+# Kullanım:
+# 1) Script Editor -> Python kısmına yapıştırıp çalıştır.
+# 2) shelf_sizer_ui() ile pencereyi aç.
+# 3) İstersen create_shelf_button() ile shelf'e de buton ekle.
+
+import maya.cmds as cmds
+import maya.mel as mel
+import maya.OpenMayaUI as omui
+
+# PySide / PySide2 uyumluluğu
+try:
+    from shiboken2 import wrapInstance
+    from PySide2 import QtWidgets, QtCore
+except Exception:
+    try:
+        from shiboken import wrapInstance
+        from PySide import QtGui as QtWidgets
+        from PySide import QtCore
+    except Exception:
+        wrapInstance = None
+        QtWidgets = None
+        QtCore = None
+
+# Global durum kaydı
+_SHELF_SIZER_STATE = {}
+
+def _get_maya_main_window():
+    """Maya ana penceresinin Qt widget'ını döner."""
+    try:
+        ptr = omui.MQtUtil.mainWindow()
+        if ptr and wrapInstance:
+            return wrapInstance(int(ptr), QtWidgets.QWidget)
+    except Exception:
+        pass
+    return None
+
+def _get_shelf_widget():
+    """gShelfTopLevel veya shelf içeren widget'ı döner (None ise None)."""
+    try:
+        # maya global değişkeni
+        gShelf = mel.eval('$tmp = $gShelfTopLevel')
+    except Exception:
+        gShelf = None
+
+    if not gShelf:
+        names = cmds.lsUI(forms=True) or []
+        for n in names:
+            if 'shelf' in n.lower():
+                gShelf = n
+                break
+
+    if not gShelf:
+        return None
+
+    ptr = omui.MQtUtil.findControl(gShelf) or omui.MQtUtil.findLayout(gShelf) or omui.MQtUtil.findWidget(gShelf)
+    if not ptr or wrapInstance is None:
+        return None
+
+    try:
+        return wrapInstance(int(ptr), QtWidgets.QWidget)
+    except Exception:
+        try:
+            return wrapInstance(long(ptr), QtWidgets.QWidget)  # py2 safety
+        except Exception:
+            return None
+
+def shelf_expand(target_height=140, target_icon_size=None):
+    """Shelf yüksekliğini artırır. Orijinal değer ilk seferde saklanır."""
+    widget = _get_shelf_widget()
+    if not widget:
+        cmds.warning('Shelf widget bulunamadı. gShelfTopLevel mevcut olmayabilir.')
+        return False
+
+    # orijinal değeri kaydet
+    if 'orig_height' not in _SHELF_SIZER_STATE:
+        try:
+            _SHELF_SIZER_STATE['orig_height'] = int(widget.height())
+        except Exception:
+            _SHELF_SIZER_STATE['orig_height'] = None
+        try:
+            _SHELF_SIZER_STATE['orig_min_h'] = int(widget.minimumHeight())
+        except Exception:
+            _SHELF_SIZER_STATE['orig_min_h'] = None
+
+    try:
+        widget.setMinimumHeight(int(target_height))
+        widget.setMaximumHeight(16777215)
+        widget.setFixedHeight(int(target_height))
+    except Exception:
+        try:
+            widget.resize(widget.width(), int(target_height))
+        except Exception:
+            pass
+
+    # iconları büyütmeye çalış
+    if target_icon_size is not None:
+        try:
+            buttons = widget.findChildren(QtWidgets.QToolButton)
+            for b in buttons:
+                try:
+                    b.setIconSize(QtCore.QSize(int(target_icon_size), int(target_icon_size)))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    try:
+        cmds.inViewMessage(amg='Shelf genişletildi: {} px'.format(target_height), pos='topCenter', fade=True)
+    except Exception:
+        pass
+    return True
+
+def shelf_restore():
+    """Shelf'i kaydedilmiş orijinal yüksekliğe döndürür."""
+    widget = _get_shelf_widget()
+    if not widget:
+        cmds.warning('Shelf widget bulunamadı. Geri alınamadı.')
+        return False
+
+    orig = _SHELF_SIZER_STATE.get('orig_height', None)
+    orig_min = _SHELF_SIZER_STATE.get('orig_min_h', None)
+
+    if orig is not None:
+        try:
+            widget.setFixedHeight(int(orig))
+        except Exception:
+            try:
+                if orig_min is not None:
+                    widget.setMinimumHeight(int(orig_min))
+                widget.resize(widget.width(), int(orig))
+            except Exception:
+                pass
+        try:
+            cmds.inViewMessage(amg='Shelf eski yüksekliğine döndürüldü.', pos='topCenter', fade=True)
+        except Exception:
+            pass
+        # temizle
+        _SHELF_SIZER_STATE.clear()
+        return True
+    else:
+        cmds.warning('Önce Apply ile değişiklik yapmadınız; geri döndürülecek orijinal kayıt yok.')
+        return False
+
+# ----------------------------
+# PySide UI
+# ----------------------------
+_DIALOG_OBJECT_NAME = 'ShelfSizerDialog_v1'
+
+class ShelfSizerDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        parent = parent or _get_maya_main_window()
+        super(ShelfSizerDialog, self).__init__(parent)
+        self.setWindowTitle('Shelf Sizer')
+        self.setObjectName(_DIALOG_OBJECT_NAME)
+        self.setMinimumWidth(320)
+        self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+
+        self._build_ui()
+        self._connect_signals()
+
+    def _build_ui(self):
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Bilgilendirme
+        info = QtWidgets.QLabel('Shelf yüksekliğini px olarak girin. İsteğe bağlı ikon boyutu (px).')
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        form = QtWidgets.QHBoxLayout()
+        # yükseklik spinbox
+        self.height_spin = QtWidgets.QSpinBox()
+        self.height_spin.setRange(24, 2000)
+        self.height_spin.setValue(140)
+        self.height_spin.setSuffix(' px')
+        form.addWidget(QtWidgets.QLabel('Height:'))
+        form.addWidget(self.height_spin)
+
+        # ikon boyutu spinbox
+        self.icon_spin = QtWidgets.QSpinBox()
+        self.icon_spin.setRange(8, 256)
+        self.icon_spin.setValue(32)
+        self.icon_spin.setSuffix(' px')
+        form.addWidget(QtWidgets.QLabel('Icon:'))
+        form.addWidget(self.icon_spin)
+
+        layout.addLayout(form)
+
+        # Butonlar
+        btn_layout = QtWidgets.QHBoxLayout()
+        self.apply_btn = QtWidgets.QPushButton('Apply')
+        self.reset_btn = QtWidgets.QPushButton('Reset')
+        self.close_btn = QtWidgets.QPushButton('Close')
+        btn_layout.addWidget(self.apply_btn)
+        btn_layout.addWidget(self.reset_btn)
+        btn_layout.addWidget(self.close_btn)
+        layout.addLayout(btn_layout)
+
+        # Shelf butonu oluşturma (opsiyonel)
+        shelf_layout = QtWidgets.QHBoxLayout()
+        self.shelf_btn = QtWidgets.QPushButton('Create Shelf Button')
+        self.shelf_btn.setToolTip('Mevcut shelf\'e bu UI\'yı açan bir shelf butonu ekler.')
+        shelf_layout.addWidget(self.shelf_btn)
+        layout.addLayout(shelf_layout)
+
+    def _connect_signals(self):
+        self.apply_btn.clicked.connect(self.on_apply)
+        self.reset_btn.clicked.connect(self.on_reset)
+        self.close_btn.clicked.connect(self.close)
+        self.shelf_btn.clicked.connect(self.on_create_shelf_button)
+
+    def on_apply(self):
+        h = int(self.height_spin.value())
+        icon = int(self.icon_spin.value())
+        ok = shelf_expand(target_height=h, target_icon_size=icon)
+        if not ok:
+            QtWidgets.QMessageBox.warning(self, 'Hata', 'Shelf bulunamadı veya uygulanamadı.')
+
+    def on_reset(self):
+        ok = shelf_restore()
+        if not ok:
+            QtWidgets.QMessageBox.warning(self, 'Hata', 'Geri alma başarısız oldu.')
+
+    def on_create_shelf_button(self):
+        try:
+            create_shelf_button()
+            QtWidgets.QMessageBox.information(self, 'Tamam', 'Shelf butonu oluşturuldu.')
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, 'Hata', 'Shelf butonu oluşturulamadı:\n{}'.format(e))
+
+def show_shelf_sizer_ui():
+    """Mevcut dialog varsa onu öne getirir, yoksa yenisini açar."""
+    try:
+        for w in QtWidgets.QApplication.topLevelWidgets():
+            if w.objectName() == _DIALOG_OBJECT_NAME:
+                w.setWindowState((w.windowState() & ~QtCore.Qt.WindowMinimized) | QtCore.Qt.WindowActive)
+                w.raise_()
+                w.activateWindow()
+                return w
+    except Exception:
+        pass
+    dlg = ShelfSizerDialog(parent=_get_maya_main_window())
+    dlg.show()
+    return dlg
+
+# ----------------------------
+# Shelf butonu oluşturucu
+# ----------------------------
+def create_shelf_button(shelf_name=None, button_label='ShelfSizer'):
+    """
+    Mevcut aktif shelf'e bir shelfButton ekler. Command, Python olarak UI'yı açar.
+    shelf_name: None ise şu anki aktif shelf seçilir.
+    """
+    # hangi shelf aktif?
+    try:
+        gShelf = mel.eval('$tmp = $gShelfTopLevel')
+    except Exception:
+        gShelf = None
+
+    # default aktfi al
+    if not gShelf:
+        # en son shelfgroup'ı bul
+        allShelves = cmds.shelfTabLayout(q=True, st=True) if cmds.shelfTabLayout(q=True, st=True) else None
+        # fallback
+        shelf_top = None
+    else:
+        shelf_top = gShelf
+
+    # Komut: python ile show_shelf_sizer_ui çağıracak
+    python_cmd = "import sys\n# eğer modül mevcutsa doğrudan fonksiyonu çağır\ntry:\n    from __main__ import show_shelf_sizer_ui\n    show_shelf_sizer_ui()\nexcept Exception:\n    # fallback: betiği tekrar çalıştırmak isteniyorsa kullanıcı script editor'da çalıştırmalı\n    pass\n"
+
+    # shelfButton eklemeye çalış
+    try:
+        # hangi shelf tab'ında olduğumuzu bulup eklemeye çalış
+        current_shelf_tab = None
+        try:
+            current_shelf_tab = cmds.shelfTabLayout(q=True, selectTab=True)
+        except Exception:
+            current_shelf_tab = None
+
+        # shelfButton ekle
+        btn = cmds.shelfButton(parent=current_shelf_tab or gShelf,
+                               annotation='Open Shelf Sizer',
+                               imageOverlayLabel=button_label,
+                               label=button_label,
+                               command='python(\"{}\")'.format(python_cmd.replace('\n', '\\n').replace('"', '\\"')),
+                               sourceType='python',
+                               width=34, height=34)
+        return btn
+    except Exception as e:
+        raise RuntimeError('Shelf butonu oluşturulurken hata: {}'.format(e))
+
+# Kısa isimler / kolay çağrı
+def shelf_sizer_ui():
+    return show_shelf_sizer_ui()
+
+# Eğer script doğrudan çalıştırıldıysa UI'yı aç
+if __name__ == '__main__':
+    shelf_sizer_ui()
