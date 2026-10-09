@@ -1,299 +1,184 @@
-# Shelf Sizer - Maya için UI ile shelf yüksekliği ayarlama + reset
-# Kullanım:
-# 1) Script Editor -> Python kısmına yapıştırıp çalıştır.
-# 2) shelf_sizer_ui() ile pencereyi aç.
-# 3) İstersen create_shelf_button() ile shelf'e de buton ekle.
-
 import maya.cmds as cmds
-import maya.mel as mel
-import maya.OpenMayaUI as omui
 
-# PySide / PySide2 uyumluluğu
-try:
-    from shiboken2 import wrapInstance
-    from PySide2 import QtWidgets, QtCore
-except Exception:
-    try:
-        from shiboken import wrapInstance
-        from PySide import QtGui as QtWidgets
-        from PySide import QtCore
-    except Exception:
-        wrapInstance = None
-        QtWidgets = None
-        QtCore = None
+WINDOW_NAME = "ROSERootMotionUI"
 
-# Global durum kaydı
-_SHELF_SIZER_STATE = {}
+# ------------------------------------------------
+# UI
+# ------------------------------------------------
+def create_ui():
+    if cmds.window(WINDOW_NAME, exists=True):
+        cmds.deleteUI(WINDOW_NAME)
 
-def _get_maya_main_window():
-    """Maya ana penceresinin Qt widget'ını döner."""
-    try:
-        ptr = omui.MQtUtil.mainWindow()
-        if ptr and wrapInstance:
-            return wrapInstance(int(ptr), QtWidgets.QWidget)
-    except Exception:
-        pass
-    return None
+    cmds.window(
+        WINDOW_NAME,
+        title="ROSE Root Motion (Maya 2026)",
+        widthHeight=(360, 420)
+    )
+    cmds.columnLayout(adjustableColumn=True, rowSpacing=10)
 
-def _get_shelf_widget():
-    """gShelfTopLevel veya shelf içeren widget'ı döner (None ise None)."""
-    try:
-        # maya global değişkeni
-        gShelf = mel.eval('$tmp = $gShelfTopLevel')
-    except Exception:
-        gShelf = None
+    cmds.text(label="Select Pelvis / Master Control")
+    cmds.rowLayout(nc=2, cw2=(250, 90))
+    cmds.textField("controlField")
+    cmds.button(label="Select", command=select_control)
+    cmds.setParent("..")
 
-    if not gShelf:
-        names = cmds.lsUI(forms=True) or []
-        for n in names:
-            if 'shelf' in n.lower():
-                gShelf = n
-                break
+    cmds.text(label="Select Root Joint")
+    cmds.rowLayout(nc=2, cw2=(250, 90))
+    cmds.textField("rootField")
+    cmds.button(label="Select", command=select_root)
+    cmds.setParent("..")
 
-    if not gShelf:
-        return None
+    cmds.separator(height=10)
 
-    ptr = omui.MQtUtil.findControl(gShelf) or omui.MQtUtil.findLayout(gShelf) or omui.MQtUtil.findWidget(gShelf)
-    if not ptr or wrapInstance is None:
-        return None
+    # ---------------- TRANSLATE ----------------
+    cmds.checkBox("translateCheck", label="Translate Enabled", value=True,
+                  changeCommand=toggle_translate_ui)
+    cmds.rowLayout("translateAxisRow", nc=3, cw3=(110, 110, 110))
+    cmds.checkBox("txCheck", label="X", value=True)
+    cmds.checkBox("tyCheck", label="Y", value=False)
+    cmds.checkBox("tzCheck", label="Z", value=True)
+    cmds.setParent("..")
 
-    try:
-        return wrapInstance(int(ptr), QtWidgets.QWidget)
-    except Exception:
-        try:
-            return wrapInstance(long(ptr), QtWidgets.QWidget)  # py2 safety
-        except Exception:
-            return None
+    cmds.separator(height=10)
 
-def shelf_expand(target_height=140, target_icon_size=None):
-    """Shelf yüksekliğini artırır. Orijinal değer ilk seferde saklanır."""
-    widget = _get_shelf_widget()
-    if not widget:
-        cmds.warning('Shelf widget bulunamadı. gShelfTopLevel mevcut olmayabilir.')
-        return False
+    # ---------------- ROTATE ----------------
+    cmds.checkBox("rotateCheck", label="Rotate Enabled (Pelvis Y rotation)",
+                  value=True, changeCommand=toggle_rotate_ui)
+    cmds.radioButtonGrp(
+        "axisSwitch",
+        label="Root Rotate Axis: ",
+        numberOfRadioButtons=2,
+        labelArray2=["Y Axis", "Z Axis"],
+        columnWidth3=(120, 70, 70),
+        select=2
+    )
 
-    # orijinal değeri kaydet
-    if 'orig_height' not in _SHELF_SIZER_STATE:
-        try:
-            _SHELF_SIZER_STATE['orig_height'] = int(widget.height())
-        except Exception:
-            _SHELF_SIZER_STATE['orig_height'] = None
-        try:
-            _SHELF_SIZER_STATE['orig_min_h'] = int(widget.minimumHeight())
-        except Exception:
-            _SHELF_SIZER_STATE['orig_min_h'] = None
+    cmds.separator(height=10)
 
-    try:
-        widget.setMinimumHeight(int(target_height))
-        widget.setMaximumHeight(16777215)
-        widget.setFixedHeight(int(target_height))
-    except Exception:
-        try:
-            widget.resize(widget.width(), int(target_height))
-        except Exception:
-            pass
+    cmds.checkBox(
+        "zeroRootCheck",
+        label="Start root at 0,0,0",
+        value=True
+    )
 
-    # iconları büyütmeye çalış
-    if target_icon_size is not None:
-        try:
-            buttons = widget.findChildren(QtWidgets.QToolButton)
-            for b in buttons:
-                try:
-                    b.setIconSize(QtCore.QSize(int(target_icon_size), int(target_icon_size)))
-                except Exception:
-                    pass
-        except Exception:
-            pass
+    cmds.separator(height=15)
 
-    try:
-        cmds.inViewMessage(amg='Shelf genişletildi: {} px'.format(target_height), pos='topCenter', fade=True)
-    except Exception:
-        pass
-    return True
+    cmds.button(
+        label="START - Root Motion Transfer",
+        height=45,
+        bgc=(0.25, 0.65, 0.25),
+        command=transfer_root_motion
+    )
 
-def shelf_restore():
-    """Shelf'i kaydedilmiş orijinal yüksekliğe döndürür."""
-    widget = _get_shelf_widget()
-    if not widget:
-        cmds.warning('Shelf widget bulunamadı. Geri alınamadı.')
-        return False
+    cmds.showWindow(WINDOW_NAME)
 
-    orig = _SHELF_SIZER_STATE.get('orig_height', None)
-    orig_min = _SHELF_SIZER_STATE.get('orig_min_h', None)
 
-    if orig is not None:
-        try:
-            widget.setFixedHeight(int(orig))
-        except Exception:
-            try:
-                if orig_min is not None:
-                    widget.setMinimumHeight(int(orig_min))
-                widget.resize(widget.width(), int(orig))
-            except Exception:
-                pass
-        try:
-            cmds.inViewMessage(amg='Shelf eski yüksekliğine döndürüldü.', pos='topCenter', fade=True)
-        except Exception:
-            pass
-        # temizle
-        _SHELF_SIZER_STATE.clear()
-        return True
-    else:
-        cmds.warning('Önce Apply ile değişiklik yapmadınız; geri döndürülecek orijinal kayıt yok.')
-        return False
+def toggle_translate_ui(*args):
+    state = cmds.checkBox("translateCheck", q=True, value=True)
+    cmds.rowLayout("translateAxisRow", e=True, enable=state)
 
-# ----------------------------
-# PySide UI
-# ----------------------------
-_DIALOG_OBJECT_NAME = 'ShelfSizerDialog_v1'
 
-class ShelfSizerDialog(QtWidgets.QDialog):
-    def __init__(self, parent=None):
-        parent = parent or _get_maya_main_window()
-        super(ShelfSizerDialog, self).__init__(parent)
-        self.setWindowTitle('Shelf Sizer')
-        self.setObjectName(_DIALOG_OBJECT_NAME)
-        self.setMinimumWidth(320)
-        self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+def toggle_rotate_ui(*args):
+    state = cmds.checkBox("rotateCheck", q=True, value=True)
+    cmds.radioButtonGrp("axisSwitch", e=True, enable=state)
 
-        self._build_ui()
-        self._connect_signals()
 
-    def _build_ui(self):
-        layout = QtWidgets.QVBoxLayout(self)
+# ------------------------------------------------
+# Selection Helpers
+# ------------------------------------------------
+def select_control(*args):
+    sel = cmds.ls(sl=True)
+    if sel:
+        cmds.textField("controlField", e=True, text=sel[0])
 
-        # Bilgilendirme
-        info = QtWidgets.QLabel('Shelf yüksekliğini px olarak girin. İsteğe bağlı ikon boyutu (px).')
-        info.setWordWrap(True)
-        layout.addWidget(info)
 
-        form = QtWidgets.QHBoxLayout()
-        # yükseklik spinbox
-        self.height_spin = QtWidgets.QSpinBox()
-        self.height_spin.setRange(24, 2000)
-        self.height_spin.setValue(140)
-        self.height_spin.setSuffix(' px')
-        form.addWidget(QtWidgets.QLabel('Height:'))
-        form.addWidget(self.height_spin)
+def select_root(*args):
+    sel = cmds.ls(sl=True)
+    if sel:
+        cmds.textField("rootField", e=True, text=sel[0])
 
-        # ikon boyutu spinbox
-        self.icon_spin = QtWidgets.QSpinBox()
-        self.icon_spin.setRange(8, 256)
-        self.icon_spin.setValue(32)
-        self.icon_spin.setSuffix(' px')
-        form.addWidget(QtWidgets.QLabel('Icon:'))
-        form.addWidget(self.icon_spin)
 
-        layout.addLayout(form)
+# ------------------------------------------------
+# World Space Helpers
+# ------------------------------------------------
+def get_world_pos(obj):
+    return cmds.xform(obj, q=True, ws=True, t=True)
 
-        # Butonlar
-        btn_layout = QtWidgets.QHBoxLayout()
-        self.apply_btn = QtWidgets.QPushButton('Apply')
-        self.reset_btn = QtWidgets.QPushButton('Reset')
-        self.close_btn = QtWidgets.QPushButton('Close')
-        btn_layout.addWidget(self.apply_btn)
-        btn_layout.addWidget(self.reset_btn)
-        btn_layout.addWidget(self.close_btn)
-        layout.addLayout(btn_layout)
 
-        # Shelf butonu oluşturma (opsiyonel)
-        shelf_layout = QtWidgets.QHBoxLayout()
-        self.shelf_btn = QtWidgets.QPushButton('Create Shelf Button')
-        self.shelf_btn.setToolTip('Mevcut shelf\'e bu UI\'yı açan bir shelf butonu ekler.')
-        shelf_layout.addWidget(self.shelf_btn)
-        layout.addLayout(shelf_layout)
+def get_world_rot_y(obj):
+    """Pelvis WORLD Y rotation"""
+    return cmds.xform(obj, q=True, ws=True, ro=True)[1]
 
-    def _connect_signals(self):
-        self.apply_btn.clicked.connect(self.on_apply)
-        self.reset_btn.clicked.connect(self.on_reset)
-        self.close_btn.clicked.connect(self.close)
-        self.shelf_btn.clicked.connect(self.on_create_shelf_button)
 
-    def on_apply(self):
-        h = int(self.height_spin.value())
-        icon = int(self.icon_spin.value())
-        ok = shelf_expand(target_height=h, target_icon_size=icon)
-        if not ok:
-            QtWidgets.QMessageBox.warning(self, 'Hata', 'Shelf bulunamadı veya uygulanamadı.')
+# ------------------------------------------------
+# Root Motion Transfer
+# ------------------------------------------------
+def transfer_root_motion(*args):
+    control = cmds.textField("controlField", q=True, text=True)
+    root = cmds.textField("rootField", q=True, text=True)
 
-    def on_reset(self):
-        ok = shelf_restore()
-        if not ok:
-            QtWidgets.QMessageBox.warning(self, 'Hata', 'Geri alma başarısız oldu.')
+    if not control or not root or not cmds.objExists(control) or not cmds.objExists(root):
+        cmds.warning("Control or Root is not valid!")
+        return
 
-    def on_create_shelf_button(self):
-        try:
-            create_shelf_button()
-            QtWidgets.QMessageBox.information(self, 'Tamam', 'Shelf butonu oluşturuldu.')
-        except Exception as e:
-            QtWidgets.QMessageBox.warning(self, 'Hata', 'Shelf butonu oluşturulamadı:\n{}'.format(e))
+    do_translate = cmds.checkBox("translateCheck", q=True, value=True)
+    do_rotate = cmds.checkBox("rotateCheck", q=True, value=True)
+    zero_root = cmds.checkBox("zeroRootCheck", q=True, value=True)
 
-def show_shelf_sizer_ui():
-    """Mevcut dialog varsa onu öne getirir, yoksa yenisini açar."""
-    try:
-        for w in QtWidgets.QApplication.topLevelWidgets():
-            if w.objectName() == _DIALOG_OBJECT_NAME:
-                w.setWindowState((w.windowState() & ~QtCore.Qt.WindowMinimized) | QtCore.Qt.WindowActive)
-                w.raise_()
-                w.activateWindow()
-                return w
-    except Exception:
-        pass
-    dlg = ShelfSizerDialog(parent=_get_maya_main_window())
-    dlg.show()
-    return dlg
+    use_x = cmds.checkBox("txCheck", q=True, value=True)
+    use_y = cmds.checkBox("tyCheck", q=True, value=True)
+    use_z = cmds.checkBox("tzCheck", q=True, value=True)
 
-# ----------------------------
-# Shelf butonu oluşturucu
-# ----------------------------
-def create_shelf_button(shelf_name=None, button_label='ShelfSizer'):
-    """
-    Mevcut aktif shelf'e bir shelfButton ekler. Command, Python olarak UI'yı açar.
-    shelf_name: None ise şu anki aktif shelf seçilir.
-    """
-    # hangi shelf aktif?
-    try:
-        gShelf = mel.eval('$tmp = $gShelfTopLevel')
-    except Exception:
-        gShelf = None
+    # 1 = Y Axis, 2 = Z Axis
+    rot_attr = "rotateY" if cmds.radioButtonGrp("axisSwitch", q=True, select=True) == 1 else "rotateZ"
 
-    # default aktfi al
-    if not gShelf:
-        # en son shelfgroup'ı bul
-        allShelves = cmds.shelfTabLayout(q=True, st=True) if cmds.shelfTabLayout(q=True, st=True) else None
-        # fallback
-        shelf_top = None
-    else:
-        shelf_top = gShelf
+    start = int(cmds.playbackOptions(q=True, min=True))
+    end = int(cmds.playbackOptions(q=True, max=True))
+    original_time = cmds.currentTime(q=True)
 
-    # Komut: python ile show_shelf_sizer_ui çağıracak
-    python_cmd = "import sys\n# eğer modül mevcutsa doğrudan fonksiyonu çağır\ntry:\n    from __main__ import show_shelf_sizer_ui\n    show_shelf_sizer_ui()\nexcept Exception:\n    # fallback: betiği tekrar çalıştırmak isteniyorsa kullanıcı script editor'da çalıştırmalı\n    pass\n"
+    cmds.cutKey(root, t=(start, end), clear=True)
+    cmds.currentTime(start)
 
-    # shelfButton eklemeye çalış
-    try:
-        # hangi shelf tab'ında olduğumuzu bulup eklemeye çalış
-        current_shelf_tab = None
-        try:
-            current_shelf_tab = cmds.shelfTabLayout(q=True, selectTab=True)
-        except Exception:
-            current_shelf_tab = None
+    # Reference values
+    base_pos = get_world_pos(control)
+    base_rot_y = get_world_rot_y(control)
 
-        # shelfButton ekle
-        btn = cmds.shelfButton(parent=current_shelf_tab or gShelf,
-                               annotation='Open Shelf Sizer',
-                               imageOverlayLabel=button_label,
-                               label=button_label,
-                               command='python(\"{}\")'.format(python_cmd.replace('\n', '\\n').replace('"', '\\"')),
-                               sourceType='python',
-                               width=34, height=34)
-        return btn
-    except Exception as e:
-        raise RuntimeError('Shelf butonu oluşturulurken hata: {}'.format(e))
+    for frame in range(start, end + 1):
+        cmds.currentTime(frame)
 
-# Kısa isimler / kolay çağrı
-def shelf_sizer_ui():
-    return show_shelf_sizer_ui()
+        pos = get_world_pos(control)
+        rot_y = get_world_rot_y(control)
 
-# Eğer script doğrudan çalıştırıldıysa UI'yı aç
-if __name__ == '__main__':
-    shelf_sizer_ui()
+        if zero_root:
+            tx = pos[0] - base_pos[0]
+            ty = pos[1] - base_pos[1]
+            tz = pos[2] - base_pos[2]
+            rot_val = rot_y - base_rot_y
+        else:
+            tx, ty, tz = pos[0], pos[1], pos[2]
+            rot_val = rot_y
+
+        if do_translate:
+            if use_x:
+                cmds.setKeyframe(root, at="translateX", v=tx, t=frame)
+            if use_y:
+                cmds.setKeyframe(root, at="translateY", v=ty, t=frame)
+            if use_z:
+                cmds.setKeyframe(root, at="translateZ", v=tz, t=frame)
+
+        if do_rotate:
+            cmds.setKeyframe(root, at=rot_attr, v=rot_val, t=frame)
+
+    cmds.currentTime(original_time)
+
+    cmds.confirmDialog(
+        title="Done",
+        message="Root motion transfer completed.",
+        button=["OK"]
+    )
+
+
+# ------------------------------------------------
+# Run
+# ------------------------------------------------
+create_ui()
